@@ -1,5 +1,5 @@
 // Serveix de la memòria cau (funciona sense connexió) i l'actualitza en segon pla.
-const C = 'fin-v1';
+const C = 'fin-v2';
 self.addEventListener('install', e => e.waitUntil(
   caches.open(C).then(c => c.addAll(['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'])).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
