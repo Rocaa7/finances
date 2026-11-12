@@ -135,7 +135,7 @@ section[hidden]{display:none}
 <script>
 const $=s=>document.querySelector(s);
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}};
-let tx=load('fin.tx',[]),buys=load('fin.buys',[]),prices=load('fin.prices',{}),cashAdj=load('fin.cashAdj',0),live=load('fin.live',null);
+let tx=load('fin.tx',[]).map(t=>t.cat==='Transferència rebuda'?{...t,cat:'Transferències'}:t),buys=load('fin.buys',[]),prices=load('fin.prices',{}),cashAdj=load('fin.cashAdj',0),live=load('fin.live',null);
 const save=()=>{localStorage.setItem('fin.tx',JSON.stringify(tx));localStorage.setItem('fin.buys',JSON.stringify(buys));localStorage.setItem('fin.prices',JSON.stringify(prices));localStorage.setItem('fin.cashAdj',JSON.stringify(cashAdj));render()};
 navigator.storage?.persist?.();
 // preus automàtics: els escriu cada hora el workflow .github/workflows/prices.yml
@@ -148,12 +148,15 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const today=()=>new Date().toISOString().slice(0,10);
 
 const EXP=['Supermercat','Restaurants','Transport','Habitatge','Factures','Oci','Compres','Salut','Esport','Altres'];
-const INC=['Nòmina','Interessos/Dividends','Transferència rebuda','Altres ingressos'];
+const INC=['Nòmina','Interessos/Dividends','Transferències','Altres ingressos'];
 const INV='Inversions',TRASP='Traspassos'; // no compten com a ingrés ni despesa
 const EXCL=new Set([INV,TRASP]);
 // tipus de Trade Republic -> etiqueta
 const TYPES={BUY:'Compra',SELL:'Venda',CARD_TRANSACTION:'Targeta',CARD_TRANSACTION_INTERNATIONAL:'Targeta',INTEREST_PAYMENT:'Interessos',DIVIDEND:'Dividend',BENEFITS_SAVEBACK:'Saveback',TRANSFER_INSTANT_INBOUND:'Transferència rebuda',TRANSFER_INSTANT_OUTBOUND:'Transferència enviada',TRANSFER_INBOUND:'Transferència rebuda',TRANSFER_OUTBOUND:'Transferència enviada',CUSTOMER_INPAYMENT:'Ingrés',CUSTOMER_INBOUND:'Transferència rebuda',CUSTOMER_OUTBOUND_REQUEST:'Retirada'};
-const OWN=/^(TRANSFER_|CUSTOMER_(INPAYMENT|INBOUND|OUTBOUND))/; // moure diners entre comptes propis
+const OWN_IN=/^(TRANSFER_.*INBOUND|CUSTOMER_(INPAYMENT|INBOUND))/; // diners que entren (nòmina traspassada) -> ingrés
+const OWN=/^(TRANSFER_.*OUTBOUND|CUSTOMER_OUTBOUND)/; // diners que surten cap a comptes propis -> traspàs
+const DIA_NOMINA=25; // ingressos des d'aquest dia compten pel mes següent
+const nextMonth=d=>{const[y,m]=d.split('-').map(Number);return m==12?`${y+1}-01`:`${y}-${String(m+1).padStart(2,'0')}`};
 // codi de comerç (MCC) dels pagaments amb targeta
 const MCC=[[/^(4829|6010|6011|6012|6051|6540)$/,TRASP],[/^(5411|5422|5441|5451|5462|5499)$/,'Supermercat'],[/^(5812|5813|5814)$/,'Restaurants'],
  [/^(4111|4112|4121|4131|4411|4511|7538|7542|4784|4789|5172|5541|5542|7512|7523|3\d{3})$/,'Transport'],[/^(4814|4899|4900|6300)$/,'Factures'],
@@ -172,11 +175,12 @@ const RULES=[
  [/amazon|aliexpress|zara|decathlon|media ?markt|pccomponentes|shein|primark|ikea/i,'Compres'],
  [/farm[aà]c|cl[ií]nic|dentist|hospital/i,'Salut'],
  [/strava|gimn[aà]s|\bgym|basic.?fit/i,'Esport'],
- [/transfer|bizum|deposit|ingreso|einzahlung/i,'Transferència rebuda'],
+ [/transfer|bizum|deposit|ingreso|einzahlung/i,'Transferències'],
 ];
 function catOf(text,amt,trade,type='',mcc=''){
  if(trade)return INV;
- if(OWN.test(type))return TRASP;
+ if(OWN_IN.test(type))return 'Transferències';
+ if(OWN.test(type))return 'Transferències'; // net: entrades - sortides pròpies
  if(amt<0)for(const[r,c]of MCC)if(r.test(mcc))return c;
  for(const[r,c]of RULES)if(r.test(text)&&(c===INV||(amt>0)===INC.includes(c)))return c;
  return amt>0?'Altres ingressos':'Altres';
@@ -233,7 +237,8 @@ function doImport(){
  const rows=csvRows.slice(1).map(r=>({r,amt:parseNum(get(r,'amount'))+(parseNum(get(r,'fee'))||0)+(parseNum(get(r,'tax'))||0)}));
  const signed=rows.some(x=>x.amt<0); // si el fitxer ja porta signes, no els toquem
  if(col.tid>=0){tx=tx.filter(t=>!t.id.startsWith('i:'));buys=buys.filter(b=>!b.id.startsWith('i:'))} // treu imports antics sense ID
- const seen=new Set(tx.map(t=>t.id));let added=0,skipped=0;
+ // els moviments ja importats s'actualitzen (si no els has editat tu)
+ const prev=new Map(tx.map(t=>[t.id,t])),seen=new Set(),nb=[];let added=0,updated=0,skipped=0;
  for(let{r,amt}of rows){
   amt=Math.round(amt*100)/100;
   const date=parseDate(get(r,'date'));
@@ -241,17 +246,20 @@ function doImport(){
   const desc=get(r,'desc')||get(r,'detail'),type=get(r,'type'),isin=get(r,'isin').toUpperCase(),sh=Math.abs(parseNum(get(r,'shares')))||0;
   if(!signed&&amt>0&&OUTFLOW.test(type))amt=-amt;
   const id=col.tid>=0&&get(r,'tid')?'tr:'+get(r,'tid'):`i:${date}|${amt}|${desc}|${type}`;
-  if(seen.has(id)){skipped++;continue}
+  if(seen.has(id)||prev.get(id)?.edited){skipped++;continue}
   seen.add(id);
   const note=[TYPES[type]??type,desc].filter(Boolean).join(' · ');
   const trade=sh>0&&(/^(buy|sell)$/i.test(type)||RULES[0][0].test(type+' '+desc));
   const cat=catOf(note,amt,trade,type,get(r,'mcc'));
-  tx.push({id,date,amt,cat,note});
-  if(trade)buys.push({id,date,name:desc||isin,isin,shares:amt<0?sh:-sh,total:Math.abs(amt)});
-  added++;
+  const t={id,date,amt,cat,note};
+  if(OWN_IN.test(type)&&+date.slice(8)>=DIA_NOMINA)t.m=nextMonth(date); // nòmina de final de mes -> mes següent
+  prev.has(id)?updated++:added++;
+  prev.set(id,t);
+  if(trade)nb.push({id,date,name:desc||isin,isin,shares:amt<0?sh:-sh,total:Math.abs(amt)});
  }
+ tx=[...prev.values()];buys=[...buys.filter(b=>!seen.has(b.id)),...nb];
  save();$('#map').hidden=true;$('#csv').value='';
- alert(`Importats: ${added}. Saltats (repetits o buits): ${skipped}.`);
+ alert(`Nous: ${added}. Actualitzats: ${updated}. Saltats (editats per tu o buits): ${skipped}.`);
 }
 
 // ---------- inversions ----------
@@ -267,8 +275,8 @@ function holdings(){
 
 // ---------- render ----------
 const month=$('#month');month.value=today().slice(0,7);month.onchange=render;
-const inMonth=(t,m)=>t.date.startsWith(m);
-function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.cat===TRASP);else if(t.amt>0)i+=t.amt;else o-=t.amt}return{i,o,v}}
+const inMonth=(t,m)=>(t.m||t.date.slice(0,7))===m;
+function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.cat===TRASP);else if(INC.includes(t.cat))i+=t.amt;else o-=t.amt}return{i,o,v}} // reemborsaments resten despesa
 const cashSum=()=>tx.reduce((a,t)=>a+t.amt,0);
 function invValue(){let c=0,v=0;for(const h of holdings()){const p=prices[h.key]??live?.prices?.[h.isin]?.eur;c+=h.cost;v+=p?p*h.sh:h.cost}return{c,v}}
 function render(){
@@ -279,7 +287,7 @@ function render(){
  $('#s-in').textContent=eur(i);$('#s-out').textContent=eur(o);$('#s-inv').textContent=eur(v);
  const sav=$('#s-sav');sav.textContent=eur(i-o);sav.className=i-o<0?'neg':'pos';
  // categories
- const by={};tx.forEach(t=>{if(inMonth(t,m)&&t.amt<0&&!EXCL.has(t.cat))by[t.cat]=(by[t.cat]||0)-t.amt});
+ const by={};tx.forEach(t=>{if(inMonth(t,m)&&!EXCL.has(t.cat)&&!INC.includes(t.cat))by[t.cat]=(by[t.cat]||0)-t.amt});Object.keys(by).forEach(k=>by[k]<=0&&delete by[k]);
  const cs=Object.entries(by).sort((a,b)=>b[1]-a[1]),max=cs[0]?.[1]||1;
  $('#cats').innerHTML=cs.map(([c,a])=>`<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${c}</span><b>${eur(a)}</b></div><div class="bar"><i style="width:${a/max*100}%"></i></div></div>`).join('')||'<div class="empty">Cap despesa aquest mes</div>';
  // chart
@@ -289,7 +297,7 @@ function render(){
   return `<rect x="${x}" y="${H-hi}" width="16" height="${hi}" rx="2" fill="var(--in)"><title>Ingressos ${eur(d.i)}</title></rect><rect x="${x+18}" y="${H-ho}" width="16" height="${ho}" rx="2" fill="var(--out)"><title>Despeses ${eur(d.o)}</title></rect><text x="${x+17}" y="${H+16}" text-anchor="middle">${new Date(ms[k]+'-01').toLocaleDateString('ca-ES',{month:'short'})}</text>`}).join('');
  // moviments
  const mv=tx.filter(t=>inMonth(t,m)).sort((a,b)=>b.date.localeCompare(a.date));
- $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)} · ${t.cat}</small></div><div class="r ${EXCL.has(t.cat)?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>';
+ $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)}${t.m?' (compta aquest mes)':''} · ${t.cat}</small></div><div class="r ${EXCL.has(t.cat)?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>';
  // inversions
  const hs=holdings();let cost=0,val=0;
  $('#i-upd').textContent=live?.updated?`· preus de les ${new Date(live.updated*1000).toLocaleString('ca-ES',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})}`:'';
@@ -310,14 +318,16 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.
 
 // ---------- dialogs ----------
 const fTx=$('#fTx');let editId=null;
-const fillCats=(k,sel)=>fTx.cat.innerHTML=[...(k>0?INC:EXP),INV,TRASP].map(c=>`<option${c===sel?' selected':''}>${c}</option>`).join('');
+const fillCats=(k,sel)=>fTx.cat.innerHTML=[...(k>0?INC:[...EXP,'Transferències']),INV,TRASP].map(c=>`<option${c===sel?' selected':''}>${c}</option>`).join('');
 fTx.kind.onchange=()=>fillCats(+fTx.kind.value);
 function openTx(t){editId=t?.id??null;fTx.reset();
  fTx.kind.value=t&&t.amt>0?1:-1;fillCats(+fTx.kind.value,t?.cat);
  fTx.amt.value=t?Math.abs(t.amt):'';fTx.date.value=t?.date??today();fTx.note.value=t?.note??'';
  $('#txDel').hidden=!t;$('#dTx').showModal()}
 fTx.onsubmit=()=>{
- const t={id:editId??'m:'+Date.now(),amt:+fTx.kind.value*Math.abs(+fTx.amt.value),date:fTx.date.value,cat:fTx.cat.value,note:fTx.note.value.trim()};
+ const old=tx.find(x=>x.id===editId);
+ const t={id:editId??'m:'+Date.now(),amt:+fTx.kind.value*Math.abs(+fTx.amt.value),date:fTx.date.value,cat:fTx.cat.value,note:fTx.note.value.trim(),edited:true};
+ if(old?.m&&old.date===t.date)t.m=old.m;
  tx=tx.filter(x=>x.id!==t.id);tx.push(t);save()};
 $('#txDel').onclick=()=>{if(confirm('Esborrar aquest moviment?')){tx=tx.filter(x=>x.id!==editId);buys=buys.filter(b=>b.id!==editId);save();$('#dTx').close()}};
 document.querySelectorAll('dialog .sec').forEach(b=>b.onclick=()=>b.closest('dialog').close());
