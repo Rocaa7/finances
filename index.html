@@ -79,8 +79,9 @@ section[hidden]{display:none}
     <div class="card"><small>Valor actual</small><b id="i-val"></b></div>
     <div class="card" style="grid-column:span 2"><small>Guany / pèrdua</small><b id="i-pl"></b></div>
   </div>
-  <h2>Posicions <small style="font-weight:400">(toca per posar el preu actual)</small></h2>
+  <h2>Posicions <small style="font-weight:400" id="i-upd"></small></h2>
   <div class="list" id="hold"></div>
+  <div class="btns" style="margin-top:10px"><button class="sec" id="isins">Copiar ISINs</button></div>
   <h2>Operacions</h2>
   <div class="list" id="ops"></div>
 </section>
@@ -132,9 +133,13 @@ section[hidden]{display:none}
 <script>
 const $=s=>document.querySelector(s);
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}};
-let tx=load('fin.tx',[]),buys=load('fin.buys',[]),prices=load('fin.prices',{});
+let tx=load('fin.tx',[]),buys=load('fin.buys',[]),prices=load('fin.prices',{}),live=load('fin.live',null);
 const save=()=>{localStorage.setItem('fin.tx',JSON.stringify(tx));localStorage.setItem('fin.buys',JSON.stringify(buys));localStorage.setItem('fin.prices',JSON.stringify(prices));render()};
 navigator.storage?.persist?.();
+// preus automàtics: els escriu cada hora el workflow .github/workflows/prices.yml
+const LIVE='https://raw.githubusercontent.com/Rocaa7/finances/main/prices.json';
+async function fetchLive(){try{const r=await fetch(LIVE+'?t='+Date.now());if(r.ok){live=await r.json();localStorage.setItem('fin.live',JSON.stringify(live));render()}}catch{}}
+document.addEventListener('visibilitychange',()=>document.hidden||fetchLive());
 const eur=new Intl.NumberFormat('ca-ES',{style:'currency',currency:'EUR'}).format;
 const num=n=>n.toLocaleString('ca-ES',{maximumFractionDigits:4});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -263,9 +268,10 @@ function render(){
  $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)} · ${t.cat}</small></div><div class="r ${t.cat===INV?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>';
  // inversions
  const hs=holdings();let cost=0,val=0;
- $('#hold').innerHTML=hs.map(h=>{const p=prices[h.key],avg=h.cost/h.sh,vv=p?p*h.sh:null;cost+=h.cost;val+=vv??h.cost;
+ $('#i-upd').textContent=live?.updated?`· preus de les ${new Date(live.updated*1000).toLocaleString('ca-ES',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})}`:'';
+ $('#hold').innerHTML=hs.map(h=>{const man=prices[h.key],p=man??live?.prices?.[h.isin]?.eur,avg=h.cost/h.sh,vv=p?p*h.sh:null;cost+=h.cost;val+=vv??h.cost;
   const pl=vv==null?'':`<span class="${vv>=h.cost?'pos':'neg'}">${eur(vv-h.cost)} (${((vv/h.cost-1)*100).toFixed(1)}%)</span>`;
-  return `<div class="row" data-k="${esc(h.key)}"><div><div class="t">${esc(h.name)}</div><small>${num(h.sh)} acc. · compra mitjana ${eur(avg)}</small><small>Preu actual: ${p?eur(p):'toca per posar-lo'}</small></div><div class="r"><b>${eur(vv??h.cost)}</b><small>invertit ${eur(h.cost)}</small>${pl}</div></div>`}).join('')||'<div class="empty">Encara no hi ha inversions. Importa el CSV o toca +.</div>';
+  return `<div class="row" data-k="${esc(h.key)}"><div><div class="t">${esc(h.name)}</div><small>${num(h.sh)} acc. · compra mitjana ${eur(avg)}</small><small>Preu actual: ${p?eur(p)+(man!=null?' (manual)':' (auto)'):'toca per posar-lo'}</small></div><div class="r"><b>${eur(vv??h.cost)}</b><small>invertit ${eur(h.cost)}</small>${pl}</div></div>`}).join('')||'<div class="empty">Encara no hi ha inversions. Importa el CSV o toca +.</div>';
  $('#i-cost').textContent=eur(cost);$('#i-val').textContent=eur(val);
  const ip=$('#i-pl');ip.textContent=`${eur(val-cost)}${cost?` (${((val/cost-1)*100).toFixed(1)}%)`:''}`;ip.className=val<cost?'neg':'pos';
  $('#ops').innerHTML=[...buys].sort((a,b)=>b.date.localeCompare(a.date)).map(b=>`<div class="row" data-b="${esc(b.id)}"><div><div class="t">${b.shares>0?'Compra':'Venda'} · ${esc(b.name)}</div><small>${b.date} · ${num(Math.abs(b.shares))} acc. a ${eur(b.total/Math.abs(b.shares))}</small></div><div class="r">${eur(b.total)}</div></div>`).join('')||'<div class="empty">Cap operació</div>';
@@ -300,7 +306,7 @@ fBuy.onsubmit=()=>{
 $('#fab').onclick=()=>{if(tab==='inv'){fBuy.reset();fBuy.date.value=today();$('#dBuy').showModal()}else openTx()};
 $('#movs').onclick=e=>{const r=e.target.closest('[data-id]');if(r){openTx(tx.find(t=>t.id===r.dataset.id))}};
 $('#hold').onclick=e=>{const r=e.target.closest('[data-k]');if(!r)return;const k=r.dataset.k;
- const v=prompt('Preu actual per acció (€). Buit per treure-ho:',prices[k]??'');if(v===null)return;
+ const v=prompt('Preu manual per acció (€). Buit = preu automàtic:',prices[k]??'');if(v===null)return;
  const n=parseNum(v);if(isNaN(n))delete prices[k];else prices[k]=n;save()};
 $('#ops').onclick=e=>{const r=e.target.closest('[data-b]');if(r&&confirm('Esborrar aquesta operació?')){buys=buys.filter(b=>b.id!==r.dataset.b);save()}};
 
@@ -314,7 +320,9 @@ $('#imp').onchange=async e=>{const f=e.target.files[0];if(!f)return;
  catch{alert('Fitxer no vàlid')}e.target.value=''};
 $('#wipe').onclick=()=>{if(confirm('Segur? S\'esborraran tots els moviments i inversions.')){tx=[];buys=[];prices={};save()}};
 
-render();
+$('#isins').onclick=async()=>{const l=[...new Set(holdings().map(h=>h.isin).filter(Boolean))].join('\n');
+ try{await navigator.clipboard.writeText(l);alert('ISINs copiats:\n'+l)}catch{prompt('Copia els ISINs:',l)}};
+render();fetchLive();
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
 </script>
 </body>
