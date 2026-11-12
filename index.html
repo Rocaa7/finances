@@ -57,6 +57,8 @@ section[hidden]{display:none}
 <header><h1>Diny</h1><input type="month" id="month" aria-label="Mes"></header>
 
 <section id="t-resum">
+  <div class="card" id="pat" style="margin-bottom:10px"><small>Patrimoni total</small><b id="p-tot" style="font-size:26px"></b>
+    <small id="p-det"></small></div>
   <div class="cards">
     <div class="card"><small>Ingressos</small><b class="pos" id="s-in"></b></div>
     <div class="card"><small>Despeses</small><b class="neg" id="s-out"></b></div>
@@ -133,8 +135,8 @@ section[hidden]{display:none}
 <script>
 const $=s=>document.querySelector(s);
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}};
-let tx=load('fin.tx',[]),buys=load('fin.buys',[]),prices=load('fin.prices',{}),live=load('fin.live',null);
-const save=()=>{localStorage.setItem('fin.tx',JSON.stringify(tx));localStorage.setItem('fin.buys',JSON.stringify(buys));localStorage.setItem('fin.prices',JSON.stringify(prices));render()};
+let tx=load('fin.tx',[]),buys=load('fin.buys',[]),prices=load('fin.prices',{}),cashAdj=load('fin.cashAdj',0),live=load('fin.live',null);
+const save=()=>{localStorage.setItem('fin.tx',JSON.stringify(tx));localStorage.setItem('fin.buys',JSON.stringify(buys));localStorage.setItem('fin.prices',JSON.stringify(prices));localStorage.setItem('fin.cashAdj',JSON.stringify(cashAdj));render()};
 navigator.storage?.persist?.();
 // preus automàtics: els escriu cada hora el workflow .github/workflows/prices.yml
 const LIVE='https://raw.githubusercontent.com/Rocaa7/finances/main/prices.json';
@@ -147,7 +149,16 @@ const today=()=>new Date().toISOString().slice(0,10);
 
 const EXP=['Supermercat','Restaurants','Transport','Habitatge','Factures','Oci','Compres','Salut','Esport','Altres'];
 const INC=['Nòmina','Interessos/Dividends','Transferència rebuda','Altres ingressos'];
-const INV='Inversions'; // no compta com a ingrés ni despesa
+const INV='Inversions',TRASP='Traspassos'; // no compten com a ingrés ni despesa
+const EXCL=new Set([INV,TRASP]);
+// tipus de Trade Republic -> etiqueta
+const TYPES={BUY:'Compra',SELL:'Venda',CARD_TRANSACTION:'Targeta',CARD_TRANSACTION_INTERNATIONAL:'Targeta',INTEREST_PAYMENT:'Interessos',DIVIDEND:'Dividend',BENEFITS_SAVEBACK:'Saveback',TRANSFER_INSTANT_INBOUND:'Transferència rebuda',TRANSFER_INSTANT_OUTBOUND:'Transferència enviada',TRANSFER_INBOUND:'Transferència rebuda',TRANSFER_OUTBOUND:'Transferència enviada',CUSTOMER_INPAYMENT:'Ingrés',CUSTOMER_INBOUND:'Transferència rebuda',CUSTOMER_OUTBOUND_REQUEST:'Retirada'};
+const OWN=/^(TRANSFER_|CUSTOMER_(INPAYMENT|INBOUND|OUTBOUND))/; // moure diners entre comptes propis
+// codi de comerç (MCC) dels pagaments amb targeta
+const MCC=[[/^(4829|6010|6011|6012|6051|6540)$/,TRASP],[/^(5411|5422|5441|5451|5462|5499)$/,'Supermercat'],[/^(5812|5813|5814)$/,'Restaurants'],
+ [/^(4111|4112|4121|4131|4411|4511|7538|7542|4784|4789|5172|5541|5542|7512|7523|3\d{3})$/,'Transport'],[/^(4814|4899|4900|6300)$/,'Factures'],
+ [/^(4722|5815|5816|5817|5818|7011|7832|7841|7922|7929|7991|7994|7996|7999)$/,'Oci'],
+ [/^(5912|80\d\d)$/,'Salut'],[/^(5655|5941|7032|7941|7997)$/,'Esport'],[/^5[3-9]\d\d$/,'Compres']];
 const RULES=[
  [/\bbuy\b|\bsell\b|savings ?plan|sparplan|\bkauf|verkauf|plan de inversi|compra de valores|venta de valores/i,INV],
  [/inter[eé]s|interest|zinsen|dividend/i,'Interessos/Dividends'],
@@ -163,8 +174,10 @@ const RULES=[
  [/strava|gimn[aà]s|\bgym|basic.?fit/i,'Esport'],
  [/transfer|bizum|deposit|ingreso|einzahlung/i,'Transferència rebuda'],
 ];
-function catOf(text,amt,shares){
- if(shares)return INV;
+function catOf(text,amt,trade,type='',mcc=''){
+ if(trade)return INV;
+ if(OWN.test(type))return TRASP;
+ if(amt<0)for(const[r,c]of MCC)if(r.test(mcc))return c;
  for(const[r,c]of RULES)if(r.test(text)&&(c===INV||(amt>0)===INC.includes(c)))return c;
  return amt>0?'Altres ingressos':'Altres';
 }
@@ -196,8 +209,9 @@ function parseDate(s){
  if(m=s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/))return `${m[3].length==2?'20'+m[3]:m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
  return null;
 }
-const COLS={date:/date|datum|fecha|data/i,amount:/amount|value|betrag|importe|wert|valor|import\b|total/i,desc:/desc|note|name|concept|nombre|verwendung|beschreibung|tit(u|e)l|detalle|merchant/i,type:/^type$|^typ$|tipo|transaction type/i,shares:/shares|anteile|st[uü]ck|acciones|participaciones|cantidad|quantity|qty/i,isin:/isin/i};
-const LBL={date:'Data *',amount:'Import *',desc:'Descripció',type:'Tipus',shares:'Accions',isin:'ISIN'};
+const COLS={date:/date|datum|fecha|data/i,amount:/amount|value|betrag|importe|wert|valor|import\b|total/i,fee:/^fee|geb[uü]hr|comisi/i,tax:/^tax|steuer|impuesto/i,desc:/desc|note|name|concept|nombre|verwendung|beschreibung|tit(u|e)l|detalle|merchant/i,detail:/^description$/i,type:/^type$|^typ$|tipo|transaction type/i,shares:/shares|anteile|st[uü]ck|acciones|participaciones|cantidad|quantity|qty/i,isin:/isin|^symbol$/i,mcc:/mcc/i,tid:/transaction.?id/i};
+const EXACT={date:'date',amount:'amount',desc:'name'}; // columnes del CSV de Trade Republic
+const LBL={date:'Data *',amount:'Import *',fee:'Comissió',tax:'Impostos',desc:'Descripció',detail:'Detall',type:'Tipus',shares:'Accions',isin:'ISIN',mcc:'Codi comerç',tid:'ID transacció'};
 const OUTFLOW=/buy|kauf|compra|card|tarjeta|karte|withdraw|removal|retirada|auszahlung|payment|pago|saliente|debit|cargo/i;
 
 let csvRows=null;
@@ -207,7 +221,7 @@ $('#csv').onchange=async e=>{
  const head=csvRows[0]||[],box=$('#map');
  const opts=i=>'<option value="-1">—</option>'+head.map((h,j)=>`<option value="${j}"${j===i?' selected':''}>${esc(h)}</option>`).join('');
  box.innerHTML=`<small style="color:var(--mut)">${csvRows.length-1} files. Revisa quina columna és cada cosa:</small>`+
-  Object.keys(COLS).map(k=>`<label>${LBL[k]}<select data-k="${k}">${opts(head.findIndex(h=>COLS[k].test(h)))}</select></label>`).join('')+
+  Object.keys(COLS).map(k=>`<label>${LBL[k]}<select data-k="${k}">${opts(head.includes(EXACT[k])?head.indexOf(EXACT[k]):head.findIndex(h=>COLS[k].test(h)))}</select></label>`).join('')+
   '<button id="doImp">Importar</button>';
  box.hidden=false;
  $('#doImp').onclick=doImport;
@@ -216,19 +230,24 @@ function doImport(){
  const col={};document.querySelectorAll('#map select').forEach(s=>col[s.dataset.k]=+s.value);
  if(col.date<0||col.amount<0)return alert('Cal triar la columna de data i la d\'import.');
  const get=(r,k)=>col[k]>=0?(r[col[k]]??'').trim():'';
+ const rows=csvRows.slice(1).map(r=>({r,amt:parseNum(get(r,'amount'))+(parseNum(get(r,'fee'))||0)+(parseNum(get(r,'tax'))||0)}));
+ const signed=rows.some(x=>x.amt<0); // si el fitxer ja porta signes, no els toquem
+ if(col.tid>=0){tx=tx.filter(t=>!t.id.startsWith('i:'));buys=buys.filter(b=>!b.id.startsWith('i:'))} // treu imports antics sense ID
  const seen=new Set(tx.map(t=>t.id));let added=0,skipped=0;
- for(const r of csvRows.slice(1)){
-  const date=parseDate(get(r,'date'));let amt=parseNum(get(r,'amount'));
+ for(let{r,amt}of rows){
+  amt=Math.round(amt*100)/100;
+  const date=parseDate(get(r,'date'));
   if(!date||isNaN(amt)||!amt){skipped++;continue}
-  const desc=get(r,'desc'),type=get(r,'type'),isin=get(r,'isin'),sh=Math.abs(parseNum(get(r,'shares')))||0;
-  if(amt>0&&OUTFLOW.test(type))amt=-amt;
-  const id=`i:${date}|${amt}|${desc}|${type}`;
+  const desc=get(r,'desc')||get(r,'detail'),type=get(r,'type'),isin=get(r,'isin').toUpperCase(),sh=Math.abs(parseNum(get(r,'shares')))||0;
+  if(!signed&&amt>0&&OUTFLOW.test(type))amt=-amt;
+  const id=col.tid>=0&&get(r,'tid')?'tr:'+get(r,'tid'):`i:${date}|${amt}|${desc}|${type}`;
   if(seen.has(id)){skipped++;continue}
   seen.add(id);
-  const note=[type,desc].filter(Boolean).join(' · ');
-  const cat=catOf(note,amt,sh&&(isin||RULES[0][0].test(note)));
+  const note=[TYPES[type]??type,desc].filter(Boolean).join(' · ');
+  const trade=sh>0&&(/^(buy|sell)$/i.test(type)||RULES[0][0].test(type+' '+desc));
+  const cat=catOf(note,amt,trade,type,get(r,'mcc'));
   tx.push({id,date,amt,cat,note});
-  if(cat===INV&&sh)buys.push({id,date,name:desc||isin,isin,shares:amt<0?sh:-sh,total:Math.abs(amt)});
+  if(trade)buys.push({id,date,name:desc||isin,isin,shares:amt<0?sh:-sh,total:Math.abs(amt)});
   added++;
  }
  save();$('#map').hidden=true;$('#csv').value='';
@@ -249,13 +268,18 @@ function holdings(){
 // ---------- render ----------
 const month=$('#month');month.value=today().slice(0,7);month.onchange=render;
 const inMonth=(t,m)=>t.date.startsWith(m);
-function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.amt>0)i+=t.amt;else o-=t.amt}return{i,o,v}}
+function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.cat===TRASP);else if(t.amt>0)i+=t.amt;else o-=t.amt}return{i,o,v}}
+const cashSum=()=>tx.reduce((a,t)=>a+t.amt,0);
+function invValue(){let c=0,v=0;for(const h of holdings()){const p=prices[h.key]??live?.prices?.[h.isin]?.eur;c+=h.cost;v+=p?p*h.sh:h.cost}return{c,v}}
 function render(){
  const m=month.value,{i,o,v}=totals(m);
+ const cash=cashSum()+cashAdj,iv=invValue();
+ $('#p-tot').textContent=eur(cash+iv.v);
+ $('#p-det').textContent=`Diners sense invertir ${eur(cash)} · Inversions ${eur(iv.v)}`;
  $('#s-in').textContent=eur(i);$('#s-out').textContent=eur(o);$('#s-inv').textContent=eur(v);
  const sav=$('#s-sav');sav.textContent=eur(i-o);sav.className=i-o<0?'neg':'pos';
  // categories
- const by={};tx.forEach(t=>{if(inMonth(t,m)&&t.amt<0&&t.cat!==INV)by[t.cat]=(by[t.cat]||0)-t.amt});
+ const by={};tx.forEach(t=>{if(inMonth(t,m)&&t.amt<0&&!EXCL.has(t.cat))by[t.cat]=(by[t.cat]||0)-t.amt});
  const cs=Object.entries(by).sort((a,b)=>b[1]-a[1]),max=cs[0]?.[1]||1;
  $('#cats').innerHTML=cs.map(([c,a])=>`<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${c}</span><b>${eur(a)}</b></div><div class="bar"><i style="width:${a/max*100}%"></i></div></div>`).join('')||'<div class="empty">Cap despesa aquest mes</div>';
  // chart
@@ -265,7 +289,7 @@ function render(){
   return `<rect x="${x}" y="${H-hi}" width="16" height="${hi}" rx="2" fill="var(--in)"><title>Ingressos ${eur(d.i)}</title></rect><rect x="${x+18}" y="${H-ho}" width="16" height="${ho}" rx="2" fill="var(--out)"><title>Despeses ${eur(d.o)}</title></rect><text x="${x+17}" y="${H+16}" text-anchor="middle">${new Date(ms[k]+'-01').toLocaleDateString('ca-ES',{month:'short'})}</text>`}).join('');
  // moviments
  const mv=tx.filter(t=>inMonth(t,m)).sort((a,b)=>b.date.localeCompare(a.date));
- $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)} · ${t.cat}</small></div><div class="r ${t.cat===INV?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>';
+ $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)} · ${t.cat}</small></div><div class="r ${EXCL.has(t.cat)?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>';
  // inversions
  const hs=holdings();let cost=0,val=0;
  $('#i-upd').textContent=live?.updated?`· preus de les ${new Date(live.updated*1000).toLocaleString('ca-ES',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})}`:'';
@@ -286,7 +310,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.
 
 // ---------- dialogs ----------
 const fTx=$('#fTx');let editId=null;
-const fillCats=(k,sel)=>fTx.cat.innerHTML=[...(k>0?INC:EXP),INV].map(c=>`<option${c===sel?' selected':''}>${c}</option>`).join('');
+const fillCats=(k,sel)=>fTx.cat.innerHTML=[...(k>0?INC:EXP),INV,TRASP].map(c=>`<option${c===sel?' selected':''}>${c}</option>`).join('');
 fTx.kind.onchange=()=>fillCats(+fTx.kind.value);
 function openTx(t){editId=t?.id??null;fTx.reset();
  fTx.kind.value=t&&t.amt>0?1:-1;fillCats(+fTx.kind.value,t?.cat);
@@ -312,14 +336,16 @@ $('#ops').onclick=e=>{const r=e.target.closest('[data-b]');if(r&&confirm('Esborr
 
 // ---------- backup ----------
 $('#exp').onclick=()=>{const a=document.createElement('a');
- a.href=URL.createObjectURL(new Blob([JSON.stringify({tx,buys,prices})],{type:'application/json'}));
+ a.href=URL.createObjectURL(new Blob([JSON.stringify({tx,buys,prices,cashAdj})],{type:'application/json'}));
  a.download=`finances-${today()}.json`;a.click()};
 $('#imp').onchange=async e=>{const f=e.target.files[0];if(!f)return;
  try{const d=JSON.parse(await f.text());if(!Array.isArray(d.tx))throw 0;
-  if(confirm(`Substituir les dades actuals per la còpia (${d.tx.length} moviments)?`)){tx=d.tx;buys=d.buys||[];prices=d.prices||{};save()}}
+  if(confirm(`Substituir les dades actuals per la còpia (${d.tx.length} moviments)?`)){tx=d.tx;buys=d.buys||[];prices=d.prices||{};cashAdj=d.cashAdj||0;save()}}
  catch{alert('Fitxer no vàlid')}e.target.value=''};
-$('#wipe').onclick=()=>{if(confirm('Segur? S\'esborraran tots els moviments i inversions.')){tx=[];buys=[];prices={};save()}};
+$('#wipe').onclick=()=>{if(confirm('Segur? S\'esborraran tots els moviments i inversions.')){tx=[];buys=[];prices={};cashAdj=0;save()}};
 
+$('#pat').onclick=()=>{const v=prompt('Diners sense invertir que et mostra Trade Republic (€). Buit = calcular-ho dels moviments:',(cashSum()+cashAdj).toFixed(2));if(v===null)return;
+ const n=parseNum(v);cashAdj=isNaN(n)?0:n-cashSum();save()};
 $('#isins').onclick=async()=>{const l=[...new Set(holdings().map(h=>h.isin).filter(Boolean))].join('\n');
  try{await navigator.clipboard.writeText(l);alert('ISINs copiats:\n'+l)}catch{prompt('Copia els ISINs:',l)}};
 render();fetchLive();

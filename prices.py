@@ -27,7 +27,7 @@ def to_eur(price, cur, fx={}):
 
 
 def symbols_for(isin):
-    m = re.fullmatch(r"XF000([A-Z]+?)0\d+", isin)
+    m = re.fullmatch(r"XF000([A-Z]+?)0\d+", isin) or re.fullmatch(r"([A-Z]{2,6})", isin)  # cripto: XF000BTC0017 o BTC
     if m:
         return [f"{m.group(1)}-EUR"]
     qs = get(f"https://query2.finance.yahoo.com/v1/finance/search?q={isin}&quotesCount=10&newsCount=0")["quotes"]
