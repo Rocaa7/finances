@@ -62,7 +62,7 @@ section[hidden]{display:none}
   <div class="cards">
     <div class="card"><small>Ingressos</small><b class="pos" id="s-in"></b></div>
     <div class="card"><small>Despeses</small><b class="neg" id="s-out"></b></div>
-    <div class="card"><small>Estalvi</small><b id="s-sav"></b></div>
+    <div class="card"><small>Estalvi</small><b id="s-sav"></b><small>el que t'ha sobrat aquest mes</small></div>
     <div class="card"><small>Invertit aquest mes</small><b id="s-inv"></b></div>
   </div>
   <h2>Despeses per categoria</h2>
@@ -252,7 +252,7 @@ function doImport(){
   const trade=sh>0&&(/^(buy|sell)$/i.test(type)||RULES[0][0].test(type+' '+desc));
   const cat=catOf(note,amt,trade,type,get(r,'mcc'));
   const t={id,date,amt,cat,note};
-  if(OWN_IN.test(type)&&+date.slice(8)>=DIA_NOMINA)t.m=nextMonth(date); // nòmina de final de mes -> mes següent
+  if((OWN_IN.test(type)||trade)&&+date.slice(8)>=DIA_NOMINA)t.m=nextMonth(date); // nòmina i el que n'inverteixes a final de mes -> mes següent
   prev.has(id)?updated++:added++;
   prev.set(id,t);
   if(trade)nb.push({id,date,name:desc||isin,isin,shares:amt<0?sh:-sh,total:Math.abs(amt)});
