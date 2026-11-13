@@ -287,7 +287,7 @@ function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat==
 const cashSum=()=>tx.reduce((a,t)=>a+t.amt,0);
 function invValue(){let c=0,v=0;for(const h of holdings()){const p=prices[h.key]??live?.prices?.[h.isin]?.eur;c+=h.cost;v+=p?p*h.sh:h.cost}return{c,v}}
 const prevMonth=d=>{const[y,m]=d.split('-').map(Number);return m==1?`${y-1}-12`:`${y}-${String(m-1).padStart(2,'0')}`};
-const mLabel=m=>new Date(m+'-01').toLocaleDateString('ca-ES',{month:'short',year:'2-digit'});
+const mLabel=m=>new Date(m+'-01').toLocaleDateString('ca-ES',{month:'short'})+' '+m.slice(2,4);
 // patrimoni a final de cada mes (últims 12): efectiu real + inversions al preu de tancament d'aquell mes
 function patHistory(){
  const cur=today().slice(0,7),first=tx.reduce((a,t)=>t.date<a?t.date:a,cur+'-01').slice(0,7),ms=[];
