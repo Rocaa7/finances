@@ -1,32 +1,32 @@
 {
- "updated": 1794531818,
+ "updated": 1794556455,
  "prices": {
   "BTC": {
-   "eur": 64124.57,
+   "eur": 62035.13,
    "symbol": "BTC-EUR"
   },
   "IE00BK5BQT80": {
-   "eur": 171.3536,
+   "eur": 171.2762,
    "symbol": "VWRA.L"
   },
   "US00217D1000": {
-   "eur": 31.1963,
+   "eur": 31.1822,
    "symbol": "ASTS"
   },
   "US4581401001": {
-   "eur": 55.3395,
+   "eur": 55.3145,
    "symbol": "INTC"
   },
   "US67066G1040": {
-   "eur": 150.2758,
+   "eur": 150.2079,
    "symbol": "NVDA"
   },
   "US75734B1008": {
-   "eur": 90.0172,
+   "eur": 89.9765,
    "symbol": "RDDT"
   },
   "US84615Q1031": {
-   "eur": 126.5395,
+   "eur": 126.4823,
    "symbol": "SPCX"
   }
  },
