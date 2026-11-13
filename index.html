@@ -69,6 +69,8 @@ section[hidden]{display:none}
   <div class="list" id="cats"></div>
   <h2>Últims 6 mesos</h2>
   <div class="card"><svg id="chart" viewBox="0 0 320 150" width="100%"></svg></div>
+  <h2>Evolució del patrimoni</h2>
+  <div class="card"><svg id="pchart" viewBox="0 0 320 150" width="100%"></svg><small id="pnote" style="color:var(--mut)"></small></div>
 </section>
 
 <section id="t-mov" hidden>
@@ -91,7 +93,7 @@ section[hidden]{display:none}
 <section id="t-aj" hidden class="stack">
   <h2>Importar de Trade Republic</h2>
   <div class="card stack">
-    <small style="color:var(--mut)">Exporta les transaccions de Trade Republic en CSV i obre el fitxer aquí. Els moviments repetits se salten.</small>
+    <small style="color:var(--mut)">Exporta les transaccions de Trade Republic en CSV i, a «Compartir», tria Diny. També pots obrir el fitxer aquí. No es dupliquen moviments.</small>
     <input type="file" id="csv" accept=".csv,text/csv,text/plain">
     <div id="map" hidden class="stack"></div>
   </div>
@@ -135,8 +137,8 @@ section[hidden]{display:none}
 <script>
 const $=s=>document.querySelector(s);
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}};
-let tx=load('fin.tx',[]).map(t=>t.cat==='Transferència rebuda'?{...t,cat:'Transferències'}:t),buys=load('fin.buys',[]),prices=load('fin.prices',{}),cashAdj=load('fin.cashAdj',0),live=load('fin.live',null);
-const save=()=>{localStorage.setItem('fin.tx',JSON.stringify(tx));localStorage.setItem('fin.buys',JSON.stringify(buys));localStorage.setItem('fin.prices',JSON.stringify(prices));localStorage.setItem('fin.cashAdj',JSON.stringify(cashAdj));render()};
+let tx=load('fin.tx',[]).map(t=>t.cat==='Transferència rebuda'?{...t,cat:'Transferències'}:t),buys=load('fin.buys',[]),prices=load('fin.prices',{}),cashAdj=load('fin.cashAdj',0),catRules=load('fin.rules',{}),live=load('fin.live',null);
+const save=()=>{localStorage.setItem('fin.tx',JSON.stringify(tx));localStorage.setItem('fin.buys',JSON.stringify(buys));localStorage.setItem('fin.prices',JSON.stringify(prices));localStorage.setItem('fin.cashAdj',JSON.stringify(cashAdj));localStorage.setItem('fin.rules',JSON.stringify(catRules));render()};
 navigator.storage?.persist?.();
 // preus automàtics: els escriu cada hora el workflow .github/workflows/prices.yml
 const LIVE='https://raw.githubusercontent.com/Rocaa7/finances/main/prices.json';
@@ -147,7 +149,7 @@ const num=n=>n.toLocaleString('ca-ES',{maximumFractionDigits:4});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const today=()=>new Date().toISOString().slice(0,10);
 
-const EXP=['Supermercat','Restaurants','Transport','Habitatge','Factures','Oci','Compres','Salut','Esport','Altres'];
+const EXP=['Supermercat','Restaurants','Transport','Habitatge','Factures','Oci','Compres','Salut','Esport','Cura personal','Viatges','Altres'];
 const INC=['Nòmina','Interessos/Dividends','Transferències','Altres ingressos'];
 const INV='Inversions',TRASP='Traspassos'; // no compten com a ingrés ni despesa
 const EXCL=new Set([INV,TRASP]);
@@ -159,8 +161,8 @@ const DIA_NOMINA=25; // ingressos des d'aquest dia compten pel mes següent
 const nextMonth=d=>{const[y,m]=d.split('-').map(Number);return m==12?`${y+1}-01`:`${y}-${String(m+1).padStart(2,'0')}`};
 // codi de comerç (MCC) dels pagaments amb targeta
 const MCC=[[/^(4829|6010|6011|6012|6051|6540)$/,TRASP],[/^(5411|5422|5441|5451|5462|5499)$/,'Supermercat'],[/^(5812|5813|5814)$/,'Restaurants'],
- [/^(4111|4112|4121|4131|4411|4511|7538|7542|4784|4789|5172|5541|5542|7512|7523|3\d{3})$/,'Transport'],[/^(4814|4899|4900|6300)$/,'Factures'],
- [/^(4722|5815|5816|5817|5818|7011|7832|7841|7922|7929|7991|7994|7996|7999)$/,'Oci'],
+ [/^(3\d{3}|4511|4722|7011|7012)$/,'Viatges'],[/^(4111|4112|4121|4131|4411|7538|7542|4784|4789|5172|5541|5542|7512|7523)$/,'Transport'],[/^(4814|4899|4900|6300)$/,'Factures'],
+ [/^(7230|7297|7298)$/,'Cura personal'],[/^(5815|5816|5817|5818|7832|7841|7922|7929|7991|7994|7996|7999)$/,'Oci'],
  [/^(5912|80\d\d)$/,'Salut'],[/^(5655|5941|7032|7941|7997)$/,'Esport'],[/^5[3-9]\d\d$/,'Compres']];
 const RULES=[
  [/\bbuy\b|\bsell\b|savings ?plan|sparplan|\bkauf|verkauf|plan de inversi|compra de valores|venta de valores/i,INV],
@@ -177,8 +179,11 @@ const RULES=[
  [/strava|gimn[aà]s|\bgym|basic.?fit/i,'Esport'],
  [/transfer|bizum|deposit|ingreso|einzahlung/i,'Transferències'],
 ];
+// comerç d'un moviment: el que va després de "Targeta · "
+const whoKey=note=>(note.includes(' · ')?note.split(' · ').slice(1).join(' · '):note).trim().toUpperCase();
 function catOf(text,amt,trade,type='',mcc=''){
  if(trade)return INV;
+ const rc=catRules[whoKey(text)];if(rc)return rc; // categoria que has triat tu per aquest comerç
  if(OWN_IN.test(type))return 'Transferències';
  if(OWN.test(type))return 'Transferències'; // net: entrades - sortides pròpies
  if(amt<0)for(const[r,c]of MCC)if(r.test(mcc))return c;
@@ -219,19 +224,21 @@ const LBL={date:'Data *',amount:'Import *',fee:'Comissió',tax:'Impostos',desc:'
 const OUTFLOW=/buy|kauf|compra|card|tarjeta|karte|withdraw|removal|retirada|auszahlung|payment|pago|saliente|debit|cargo/i;
 
 let csvRows=null;
+function detect(head){const col={};for(const k in COLS)col[k]=head.includes(EXACT[k])?head.indexOf(EXACT[k]):head.findIndex(h=>COLS[k].test(h));return col}
 $('#csv').onchange=async e=>{
  const file=e.target.files[0];if(!file)return;
- csvRows=parseCSV(await file.text());
- const head=csvRows[0]||[],box=$('#map');
+ csvRows=parseCSV(await file.text());showMap();
+};
+function showMap(){
+ const head=csvRows[0]||[],box=$('#map'),det=detect(head);
  const opts=i=>'<option value="-1">—</option>'+head.map((h,j)=>`<option value="${j}"${j===i?' selected':''}>${esc(h)}</option>`).join('');
  box.innerHTML=`<small style="color:var(--mut)">${csvRows.length-1} files. Revisa quina columna és cada cosa:</small>`+
-  Object.keys(COLS).map(k=>`<label>${LBL[k]}<select data-k="${k}">${opts(head.includes(EXACT[k])?head.indexOf(EXACT[k]):head.findIndex(h=>COLS[k].test(h)))}</select></label>`).join('')+
+  Object.keys(COLS).map(k=>`<label>${LBL[k]}<select data-k="${k}">${opts(det[k])}</select></label>`).join('')+
   '<button id="doImp">Importar</button>';
  box.hidden=false;
- $('#doImp').onclick=doImport;
-};
-function doImport(){
- const col={};document.querySelectorAll('#map select').forEach(s=>col[s.dataset.k]=+s.value);
+ $('#doImp').onclick=()=>{const col={};document.querySelectorAll('#map select').forEach(s=>col[s.dataset.k]=+s.value);doImport(col)};
+}
+function doImport(col){
  if(col.date<0||col.amount<0)return alert('Cal triar la columna de data i la d\'import.');
  const get=(r,k)=>col[k]>=0?(r[col[k]]??'').trim():'';
  const rows=csvRows.slice(1).map(r=>({r,amt:parseNum(get(r,'amount'))+(parseNum(get(r,'fee'))||0)+(parseNum(get(r,'tax'))||0)}));
@@ -263,9 +270,9 @@ function doImport(){
 }
 
 // ---------- inversions ----------
-function holdings(){
+function holdings(upto='9999'){
  const m={};
- [...buys].sort((a,b)=>a.date.localeCompare(b.date)).forEach(b=>{
+ buys.filter(b=>b.date<=upto).sort((a,b)=>a.date.localeCompare(b.date)).forEach(b=>{
   const k=b.isin||b.name,h=m[k]??={key:k,name:b.name,isin:b.isin,sh:0,cost:0};
   if(b.shares>0){h.sh+=b.shares;h.cost+=b.total}
   else{const s=Math.min(-b.shares,h.sh),avg=h.sh?h.cost/h.sh:0;h.cost-=avg*s;h.sh-=s} // ponytail: cost mitjà ponderat, sense FIFO fiscal
@@ -279,7 +286,30 @@ const inMonth=(t,m)=>(t.m||t.date.slice(0,7))===m;
 function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.cat===TRASP);else if(INC.includes(t.cat))i+=t.amt;else o-=t.amt}return{i,o,v}} // reemborsaments resten despesa
 const cashSum=()=>tx.reduce((a,t)=>a+t.amt,0);
 function invValue(){let c=0,v=0;for(const h of holdings()){const p=prices[h.key]??live?.prices?.[h.isin]?.eur;c+=h.cost;v+=p?p*h.sh:h.cost}return{c,v}}
+const prevMonth=d=>{const[y,m]=d.split('-').map(Number);return m==1?`${y-1}-12`:`${y}-${String(m-1).padStart(2,'0')}`};
+const mLabel=m=>new Date(m+'-01').toLocaleDateString('ca-ES',{month:'short',year:'2-digit'});
+// patrimoni a final de cada mes (últims 12): efectiu real + inversions al preu de tancament d'aquell mes
+function patHistory(){
+ const cur=today().slice(0,7),first=tx.reduce((a,t)=>t.date<a?t.date:a,cur+'-01').slice(0,7),ms=[];
+ for(let m=cur;ms.length<12&&m>=first;m=prevMonth(m))ms.unshift(m);
+ return ms.map(m=>{const end=m+'-31';let v=cashAdj;for(const t of tx)if(t.date<=end)v+=t.amt;
+  for(const h of holdings(end)){const p=m===cur?prices[h.key]??live?.prices?.[h.isin]?.eur:live?.prices?.[h.isin]?.hist?.[m];v+=p?p*h.sh:h.cost}
+  return{m,v}})
+}
+let ph=[];
+function drawPat(){
+ ph=patHistory();const W=320,H=125,P=12,n=ph.length,vs=ph.map(p=>p.v),lo=Math.min(0,...vs),hi=Math.max(1,...vs);
+ const X=i=>P+i*(W-2*P)/Math.max(1,n-1),Y=v=>P+(H-2*P)*(1-(v-lo)/(hi-lo||1));
+ const pts=ph.map((p,i)=>`${X(i)},${Y(p.v)}`).join(' ');
+ $('#pchart').innerHTML=n?`<polygon points="${X(0)},${Y(lo)} ${pts} ${X(n-1)},${Y(lo)}" fill="var(--acc)" opacity=".15"/><polyline points="${pts}" fill="none" stroke="var(--acc)" stroke-width="2"/>`+
+  ph.map((p,i)=>`<circle cx="${X(i)}" cy="${Y(p.v)}" r="3" fill="var(--acc)"/>`+((n-1-i)%(n>7?2:1)?'':`<text x="${X(i)}" y="${H+16}" text-anchor="middle">${mLabel(p.m)}</text>`)).join(''):'';
+ $('#pnote').textContent=n?'Toca el gràfic per veure cada mes.':'';
+}
+$('#pchart').onclick=e=>{if(!ph.length)return;const r=$('#pchart').getBoundingClientRect(),x=(e.clientX-r.left)/r.width*320;
+ const i=Math.max(0,Math.min(ph.length-1,Math.round((x-12)/((320-24)/Math.max(1,ph.length-1)))));
+ const p=ph[i],d=i?p.v-ph[i-1].v:0;$('#pnote').textContent=`${mLabel(p.m)}: ${eur(p.v)}${i?` (${d>=0?'+':''}${eur(d)} vs mes anterior)`:''}`};
 function render(){
+ drawPat();
  const m=month.value,{i,o,v}=totals(m);
  const cash=cashSum()+cashAdj,iv=invValue();
  $('#p-tot').textContent=eur(cash+iv.v);
@@ -328,6 +358,10 @@ fTx.onsubmit=()=>{
  const old=tx.find(x=>x.id===editId);
  const t={id:editId??'m:'+Date.now(),amt:+fTx.kind.value*Math.abs(+fTx.amt.value),date:fTx.date.value,cat:fTx.cat.value,note:fTx.note.value.trim(),edited:true};
  if(old?.m&&old.date===t.date)t.m=old.m;
+ const who=old&&whoKey(old.note);
+ if(who&&old.cat!==t.cat&&t.cat!==INV&&old.cat!==INV&&tx.some(x=>x.id!==t.id&&whoKey(x.note)===who)&&
+  confirm(`Vols que tots els moviments de «${who}» (també els futurs) vagin a ${t.cat}?`)){
+  catRules[who]=t.cat;tx.forEach(x=>{if(whoKey(x.note)===who&&x.cat!==INV)x.cat=t.cat})}
  tx=tx.filter(x=>x.id!==t.id);tx.push(t);save()};
 $('#txDel').onclick=()=>{if(confirm('Esborrar aquest moviment?')){tx=tx.filter(x=>x.id!==editId);buys=buys.filter(b=>b.id!==editId);save();$('#dTx').close()}};
 document.querySelectorAll('dialog .sec').forEach(b=>b.onclick=()=>b.closest('dialog').close());
@@ -346,19 +380,26 @@ $('#ops').onclick=e=>{const r=e.target.closest('[data-b]');if(r&&confirm('Esborr
 
 // ---------- backup ----------
 $('#exp').onclick=()=>{const a=document.createElement('a');
- a.href=URL.createObjectURL(new Blob([JSON.stringify({tx,buys,prices,cashAdj})],{type:'application/json'}));
+ a.href=URL.createObjectURL(new Blob([JSON.stringify({tx,buys,prices,cashAdj,catRules})],{type:'application/json'}));
  a.download=`finances-${today()}.json`;a.click()};
 $('#imp').onchange=async e=>{const f=e.target.files[0];if(!f)return;
  try{const d=JSON.parse(await f.text());if(!Array.isArray(d.tx))throw 0;
-  if(confirm(`Substituir les dades actuals per la còpia (${d.tx.length} moviments)?`)){tx=d.tx;buys=d.buys||[];prices=d.prices||{};cashAdj=d.cashAdj||0;save()}}
+  if(confirm(`Substituir les dades actuals per la còpia (${d.tx.length} moviments)?`)){tx=d.tx;buys=d.buys||[];prices=d.prices||{};cashAdj=d.cashAdj||0;catRules=d.catRules||{};save()}}
  catch{alert('Fitxer no vàlid')}e.target.value=''};
-$('#wipe').onclick=()=>{if(confirm('Segur? S\'esborraran tots els moviments i inversions.')){tx=[];buys=[];prices={};cashAdj=0;save()}};
+$('#wipe').onclick=()=>{if(confirm('Segur? S\'esborraran tots els moviments i inversions.')){tx=[];buys=[];prices={};cashAdj=0;catRules={};save()}};
 
 $('#pat').onclick=()=>{const v=prompt('Diners sense invertir que et mostra Trade Republic (€). Buit = calcular-ho dels moviments:',(cashSum()+cashAdj).toFixed(2));if(v===null)return;
  const n=parseNum(v);cashAdj=isNaN(n)?0:n-cashSum();save()};
 $('#isins').onclick=async()=>{const l=[...new Set(holdings().map(h=>h.isin).filter(Boolean))].join('\n');
  try{await navigator.clipboard.writeText(l);alert('ISINs copiats:\n'+l)}catch{prompt('Copia els ISINs:',l)}};
 render();fetchLive();
+// CSV compartit des d'una altra app (Trade Republic -> Compartir -> Diny): el desa sw.js
+if(location.search.includes('shared'))(async()=>{
+ history.replaceState(null,'',location.pathname);
+ const c=await caches.open('share'),r=await c.match('shared.csv');if(!r)return;await c.delete('shared.csv');
+ csvRows=parseCSV(await r.text());const col=detect(csvRows[0]||[]);
+ if(col.date>=0&&col.amount>=0)doImport(col);else{showMap();$('nav [data-t=aj]').click()}
+})();
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
 </script>
 </body>

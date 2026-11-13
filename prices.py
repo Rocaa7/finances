@@ -11,9 +11,33 @@ def get(url):
         return json.load(r)
 
 
+def chart(symbol, rng="1d", interval="1d"):
+    return get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range={rng}&interval={interval}")["chart"]["result"][0]
+
+
 def quote(symbol):
-    m = get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range=1d&interval=1d")["chart"]["result"][0]["meta"]
+    m = chart(symbol)["meta"]
     return m["regularMarketPrice"], m["currency"]
+
+
+def monthly(symbol):
+    """Tancament de cada mes dels últims 2 anys: ({'2026-10': preu, ...}, moneda)."""
+    r = chart(symbol, "2y", "1mo")
+    closes = r["indicators"]["quote"][0]["close"]
+    # +3 dies: el timestamp és l'inici del mes en hora local de la borsa
+    return {time.strftime("%Y-%m", time.gmtime(t + 3 * 86400)): c for t, c in zip(r.get("timestamp", []), closes) if c}, r["meta"]["currency"]
+
+
+def hist_eur(symbol, fxh={}):
+    h, cur = monthly(symbol)
+    if cur == "GBp":
+        h, cur = {m: p / 100 for m, p in h.items()}, "GBP"
+    if cur != "EUR":
+        if cur not in fxh:
+            fxh[cur] = monthly(f"EUR{cur}=X")[0]
+        now = to_eur(1, cur)  # si falta el canvi d'un mes, el d'avui
+        h = {m: p / fxh[cur][m] if m in fxh[cur] else p * now for m, p in h.items()}
+    return {m: round(p, 4) for m, p in h.items()}
 
 
 def to_eur(price, cur, fx={}):
@@ -39,7 +63,12 @@ def price_for(isin):
     for s in symbols_for(isin)[:4]:
         try:
             p, cur = quote(s)
-            return {"eur": round(to_eur(p, cur), 4), "symbol": s}
+            r = {"eur": round(to_eur(p, cur), 4), "symbol": s}
+            try:
+                r["hist"] = hist_eur(s)  # per al gràfic d'evolució del patrimoni
+            except Exception as e:
+                print(s, "sense historic:", e, file=sys.stderr)
+            return r
         except Exception:
             continue
     return None
