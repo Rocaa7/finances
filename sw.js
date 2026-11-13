@@ -1,5 +1,5 @@
 // Primer la xarxa (sempre la versió nova); si no hi ha connexió, la còpia guardada.
-const C = 'fin-v6';
+const C = 'fin-v7';
 self.addEventListener('install', e => e.waitUntil(
   caches.open(C).then(c => c.addAll(['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'])).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(

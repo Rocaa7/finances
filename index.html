@@ -81,8 +81,12 @@ section[hidden]{display:none}
   <div class="cards">
     <div class="card"><small>Invertit</small><b id="i-cost"></b></div>
     <div class="card"><small>Valor actual</small><b id="i-val"></b></div>
-    <div class="card" style="grid-column:span 2"><small>Guany / pèrdua</small><b id="i-pl"></b></div>
+    <div class="card" style="grid-column:span 2"><small>Guany / pèrdua (el que tens ara)</small><b id="i-pl"></b></div>
+    <div class="card"><small>Guanyat amb vendes</small><b id="i-real"></b></div>
+    <div class="card"><small>Dividends i interessos</small><b id="i-div"></b><small id="i-div2" style="color:var(--mut)"></small></div>
   </div>
+  <h2>Repartiment</h2>
+  <div class="card" id="split"></div>
   <h2>Posicions <small style="font-weight:400" id="i-upd"></small></h2>
   <div class="list" id="hold"></div>
   <div class="btns" style="margin-top:10px"><button class="sec" id="isins">Copiar ISINs</button></div>
@@ -143,7 +147,15 @@ navigator.storage?.persist?.();
 // preus automàtics: els escriu cada hora el workflow .github/workflows/prices.yml
 const LIVE='https://raw.githubusercontent.com/Rocaa7/finances/main/prices.json';
 async function fetchLive(){try{const r=await fetch(LIVE+'?t='+Date.now());if(r.ok){live=await r.json();localStorage.setItem('fin.live',JSON.stringify(live));render()}}catch{}}
-document.addEventListener('visibilitychange',()=>document.hidden||fetchLive());
+// criptos: preu al moment des de CoinGecko (té CORS, no cal passar per GitHub)
+const COINS={BTC:'bitcoin',ETH:'ethereum',SOL:'solana',XRP:'ripple',ADA:'cardano',DOGE:'dogecoin',DOT:'polkadot',LTC:'litecoin',LINK:'chainlink',AVAX:'avalanche-2'};
+let coinP={};
+const coinOf=isin=>COINS[(isin||'').match(/^XF000([A-Z]+?)0\d+$/)?.[1]??isin];
+async function fetchCrypto(){const ids=[...new Set(buys.map(b=>coinOf(b.isin)).filter(Boolean))];if(!ids.length)return;
+ try{const r=await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=eur`);if(!r.ok)return;const j=await r.json();
+  coinP={};for(const b of buys){const c=coinOf(b.isin);if(j[c]?.eur)coinP[b.isin]=j[c].eur}render()}catch{}}
+const curPrice=h=>prices[h.key]??coinP[h.isin]??live?.prices?.[h.isin]?.eur;
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){fetchLive();fetchCrypto()}});
 const eur=new Intl.NumberFormat('ca-ES',{style:'currency',currency:'EUR'}).format;
 const num=n=>n.toLocaleString('ca-ES',{maximumFractionDigits:4});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -270,13 +282,15 @@ function doImport(col){
 }
 
 // ---------- inversions ----------
+let realized=0; // guany/pèrdua de tot el que has venut (es recalcula a cada holdings())
 function holdings(upto='9999'){
- const m={};
+ const m={};let real=0;
  buys.filter(b=>b.date<=upto).sort((a,b)=>a.date.localeCompare(b.date)).forEach(b=>{
   const k=b.isin||b.name,h=m[k]??={key:k,name:b.name,isin:b.isin,sh:0,cost:0};
   if(b.shares>0){h.sh+=b.shares;h.cost+=b.total}
-  else{const s=Math.min(-b.shares,h.sh),avg=h.sh?h.cost/h.sh:0;h.cost-=avg*s;h.sh-=s} // ponytail: cost mitjà ponderat, sense FIFO fiscal
+  else{const s=Math.min(-b.shares,h.sh),avg=h.sh?h.cost/h.sh:0;real+=b.total-avg*s;h.cost-=avg*s;h.sh-=s} // ponytail: cost mitjà ponderat, sense FIFO fiscal
  });
+ if(upto==='9999')realized=real;
  return Object.values(m).filter(h=>h.sh>1e-9);
 }
 
@@ -285,7 +299,7 @@ const month=$('#month');month.value=today().slice(0,7);month.onchange=render;
 const inMonth=(t,m)=>(t.m||t.date.slice(0,7))===m;
 function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.cat===TRASP);else if(INC.includes(t.cat))i+=t.amt;else o-=t.amt}return{i,o,v}} // reemborsaments resten despesa
 const cashSum=()=>tx.reduce((a,t)=>a+t.amt,0);
-function invValue(){let c=0,v=0;for(const h of holdings()){const p=prices[h.key]??live?.prices?.[h.isin]?.eur;c+=h.cost;v+=p?p*h.sh:h.cost}return{c,v}}
+function invValue(){let c=0,v=0;for(const h of holdings()){const p=curPrice(h);c+=h.cost;v+=p?p*h.sh:h.cost}return{c,v}}
 const prevMonth=d=>{const[y,m]=d.split('-').map(Number);return m==1?`${y-1}-12`:`${y}-${String(m-1).padStart(2,'0')}`};
 const mLabel=m=>new Date(m+'-01').toLocaleDateString('ca-ES',{month:'short'})+' '+m.slice(2,4);
 // patrimoni a final de cada mes (últims 12): efectiu real + inversions al preu de tancament d'aquell mes
@@ -293,7 +307,7 @@ function patHistory(){
  const cur=today().slice(0,7),first=tx.reduce((a,t)=>t.date<a?t.date:a,cur+'-01').slice(0,7),ms=[];
  for(let m=cur;ms.length<12&&m>=first;m=prevMonth(m))ms.unshift(m);
  return ms.map(m=>{const end=m+'-31';let v=cashAdj;for(const t of tx)if(t.date<=end)v+=t.amt;
-  for(const h of holdings(end)){const p=m===cur?prices[h.key]??live?.prices?.[h.isin]?.eur:live?.prices?.[h.isin]?.hist?.[m];v+=p?p*h.sh:h.cost}
+  for(const h of holdings(end)){const p=m===cur?curPrice(h):live?.prices?.[h.isin]?.hist?.[m];v+=p?p*h.sh:h.cost}
   return{m,v}})
 }
 let ph=[];
@@ -331,11 +345,16 @@ function render(){
  // inversions
  const hs=holdings();let cost=0,val=0;
  $('#i-upd').textContent=live?.updated?`· preus de les ${new Date(live.updated*1000).toLocaleString('ca-ES',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})}`:'';
- $('#hold').innerHTML=hs.map(h=>{const man=prices[h.key],p=man??live?.prices?.[h.isin]?.eur,avg=h.cost/h.sh,vv=p?p*h.sh:null;cost+=h.cost;val+=vv??h.cost;
+ $('#hold').innerHTML=hs.map(h=>{const man=prices[h.key],p=curPrice(h),avg=h.cost/h.sh,vv=p?p*h.sh:null;cost+=h.cost;val+=vv??h.cost;
   const pl=vv==null?'':`<span class="${vv>=h.cost?'pos':'neg'}">${eur(vv-h.cost)} (${((vv/h.cost-1)*100).toFixed(1)}%)</span>`;
-  return `<div class="row" data-k="${esc(h.key)}"><div><div class="t">${esc(h.name)}</div><small>${num(h.sh)} acc. · compra mitjana ${eur(avg)}</small><small>Preu actual: ${p?eur(p)+(man!=null?' (manual)':' (auto)'):'toca per posar-lo'}</small></div><div class="r"><b>${eur(vv??h.cost)}</b><small>invertit ${eur(h.cost)}</small>${pl}</div></div>`}).join('')||'<div class="empty">Encara no hi ha inversions. Importa el CSV o toca +.</div>';
+  return `<div class="row" data-k="${esc(h.key)}"><div><div class="t">${esc(h.name)}</div><small>${num(h.sh)} acc. · compra mitjana ${eur(avg)}</small><small>Preu actual: ${p?eur(p)+(man!=null?' (manual)':coinP[h.isin]?' (al moment)':' (auto)'):'toca per posar-lo'}</small></div><div class="r"><b>${eur(vv??h.cost)}</b><small>invertit ${eur(h.cost)}</small>${pl}</div></div>`}).join('')||'<div class="empty">Encara no hi ha inversions. Importa el CSV o toca +.</div>';
  $('#i-cost').textContent=eur(cost);$('#i-val').textContent=eur(val);
  const ip=$('#i-pl');ip.textContent=`${eur(val-cost)}${cost?` (${((val/cost-1)*100).toFixed(1)}%)`:''}`;ip.className=val<cost?'neg':'pos';
+ const ir=$('#i-real');ir.textContent=eur(realized);ir.className=realized<0?'neg':'pos';
+ const sumOf=re=>tx.reduce((a,t)=>re.test(t.note||'')?a+t.amt:a,0),dv=sumOf(/^Dividend/),it=sumOf(/^Interessos/);
+ $('#i-div').textContent=eur(dv+it);$('#i-div2').textContent=`Dividends ${eur(dv)} · Interessos ${eur(it)}`;
+ const parts=hs.map(h=>{const p=curPrice(h);return[h.name,p?p*h.sh:h.cost]}).sort((a,b)=>b[1]-a[1]),tot=parts.reduce((a,x)=>a+x[1],0)||1;
+ $('#split').innerHTML=parts.map(([n,v])=>`<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${esc(n)}</span><b>${(v/tot*100).toFixed(1)}%</b></div><div class="bar"><i style="width:${v/tot*100}%;background:var(--acc)"></i></div></div>`).join('')||'<div class="empty">Cap posició</div>';
  $('#ops').innerHTML=[...buys].sort((a,b)=>b.date.localeCompare(a.date)).map(b=>`<div class="row" data-b="${esc(b.id)}"><div><div class="t">${b.shares>0?'Compra':'Venda'} · ${esc(b.name)}</div><small>${b.date} · ${num(Math.abs(b.shares))} acc. a ${eur(b.total/Math.abs(b.shares))}</small></div><div class="r">${eur(b.total)}</div></div>`).join('')||'<div class="empty">Cap operació</div>';
 }
 
@@ -392,7 +411,7 @@ $('#pat').onclick=()=>{const v=prompt('Diners sense invertir que et mostra Trade
  const n=parseNum(v);cashAdj=isNaN(n)?0:n-cashSum();save()};
 $('#isins').onclick=async()=>{const l=[...new Set(holdings().map(h=>h.isin).filter(Boolean))].join('\n');
  try{await navigator.clipboard.writeText(l);alert('ISINs copiats:\n'+l)}catch{prompt('Copia els ISINs:',l)}};
-render();fetchLive();
+render();fetchLive();fetchCrypto();
 // CSV compartit des d'una altra app (Trade Republic -> Compartir -> Diny): el desa sw.js
 if(location.search.includes('shared'))(async()=>{
  history.replaceState(null,'',location.pathname);
