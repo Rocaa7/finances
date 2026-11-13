@@ -71,9 +71,20 @@ section[hidden]{display:none}
   <div class="card"><svg id="chart" viewBox="0 0 320 150" width="100%"></svg></div>
   <h2>Evolució del patrimoni</h2>
   <div class="card"><svg id="pchart" viewBox="0 0 320 150" width="100%"></svg><small id="pnote" style="color:var(--mut)"></small></div>
+  <h2 id="y-h"></h2>
+  <div class="cards">
+    <div class="card"><small>Ingressos</small><b class="pos" id="y-in"></b></div>
+    <div class="card"><small>Despeses</small><b class="neg" id="y-out"></b><small id="y-avg"></small></div>
+    <div class="card"><small>Estalvi</small><b id="y-sav"></b><small id="y-rate"></small></div>
+    <div class="card"><small>Invertit</small><b id="y-inv"></b></div>
+  </div>
+  <h2>On gastes més aquest any</h2>
+  <div class="list" id="y-cats"></div>
 </section>
 
 <section id="t-mov" hidden>
+  <input type="search" id="q" placeholder="Cerca comerç, categoria o import (tots els mesos)" style="margin-bottom:10px">
+  <small id="qsum" style="color:var(--mut);display:block;margin:-4px 0 8px"></small>
   <div class="list" id="movs"></div>
 </section>
 
@@ -295,7 +306,7 @@ function holdings(upto='9999'){
 }
 
 // ---------- render ----------
-const month=$('#month');month.value=today().slice(0,7);month.onchange=render;
+const month=$('#month');month.value=today().slice(0,7);month.onchange=render;$('#q').oninput=render;
 const inMonth=(t,m)=>(t.m||t.date.slice(0,7))===m;
 function totals(m){let i=0,o=0,v=0;for(const t of tx)if(inMonth(t,m)){if(t.cat===INV)v-=t.amt;else if(t.cat===TRASP);else if(INC.includes(t.cat))i+=t.amt;else o-=t.amt}return{i,o,v}} // reemborsaments resten despesa
 const cashSum=()=>tx.reduce((a,t)=>a+t.amt,0);
@@ -322,6 +333,11 @@ function drawPat(){
 $('#pchart').onclick=e=>{if(!ph.length)return;const r=$('#pchart').getBoundingClientRect(),x=(e.clientX-r.left)/r.width*320;
  const i=Math.max(0,Math.min(ph.length-1,Math.round((x-12)/((320-24)/Math.max(1,ph.length-1)))));
  const p=ph[i],d=i?p.v-ph[i-1].v:0;$('#pnote').textContent=`${mLabel(p.m)}: ${eur(p.v)}${i?` (${d>=0?'+':''}${eur(d)} vs mes anterior)`:''}`};
+function catList(sel,f,when){
+ const by={};tx.forEach(t=>{if(f(t)&&!EXCL.has(t.cat)&&!INC.includes(t.cat))by[t.cat]=(by[t.cat]||0)-t.amt});Object.keys(by).forEach(k=>by[k]<=0&&delete by[k]);
+ const cs=Object.entries(by).sort((a,b)=>b[1]-a[1]),max=cs[0]?.[1]||1;
+ $(sel).innerHTML=cs.map(([c,a])=>`<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${c}</span><b>${eur(a)}</b></div><div class="bar"><i style="width:${a/max*100}%"></i></div></div>`).join('')||`<div class="empty">Cap despesa ${when}</div>`;
+}
 function render(){
  drawPat();
  const m=month.value,{i,o,v}=totals(m);
@@ -331,17 +347,25 @@ function render(){
  $('#s-in').textContent=eur(i);$('#s-out').textContent=eur(o);$('#s-inv').textContent=eur(v);
  const sav=$('#s-sav');sav.textContent=eur(i-o);sav.className=i-o<0?'neg':'pos';
  // categories
- const by={};tx.forEach(t=>{if(inMonth(t,m)&&!EXCL.has(t.cat)&&!INC.includes(t.cat))by[t.cat]=(by[t.cat]||0)-t.amt});Object.keys(by).forEach(k=>by[k]<=0&&delete by[k]);
- const cs=Object.entries(by).sort((a,b)=>b[1]-a[1]),max=cs[0]?.[1]||1;
- $('#cats').innerHTML=cs.map(([c,a])=>`<div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${c}</span><b>${eur(a)}</b></div><div class="bar"><i style="width:${a/max*100}%"></i></div></div>`).join('')||'<div class="empty">Cap despesa aquest mes</div>';
+ catList('#cats',t=>inMonth(t,m),'aquest mes');
+ // any del mes triat
+ const yr=m.slice(0,4),yms=[...Array(12)].map((_,k)=>`${yr}-${String(k+1).padStart(2,'0')}`).filter(x=>x<=today().slice(0,7)),yt=yms.map(totals);
+ const Y=k=>yt.reduce((a,d)=>a+d[k],0),yi=Y('i'),yo=Y('o'),nm=yt.filter(d=>d.i||d.o).length||1;
+ $('#y-h').textContent='Resum de '+yr;$('#y-in').textContent=eur(yi);$('#y-out').textContent=eur(yo);$('#y-inv').textContent=eur(Y('v'));
+ $('#y-avg').textContent=`${eur(yo/nm)} de mitjana al mes`;
+ const ys=$('#y-sav');ys.textContent=eur(yi-yo);ys.className=yi-yo<0?'neg':'pos';$('#y-rate').textContent=yi>0?`estalvies el ${Math.round((yi-yo)/yi*100)}% del que cobres`:'';
+ catList('#y-cats',t=>(t.m||t.date).startsWith(yr),'aquest any');
  // chart
  const [y,mo]=m.split('-').map(Number),ms=[...Array(6)].map((_,k)=>{const d=new Date(y,mo-6+k,1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});
  const data=ms.map(totals),top=Math.max(1,...data.flatMap(d=>[d.i,d.o])),H=120,W=320/6;
  $('#chart').innerHTML=data.map((d,k)=>{const x=k*W+8,hi=d.i/top*H,ho=d.o/top*H;
   return `<rect x="${x}" y="${H-hi}" width="16" height="${hi}" rx="2" fill="var(--in)"><title>Ingressos ${eur(d.i)}</title></rect><rect x="${x+18}" y="${H-ho}" width="16" height="${ho}" rx="2" fill="var(--out)"><title>Despeses ${eur(d.o)}</title></rect><text x="${x+17}" y="${H+16}" text-anchor="middle">${new Date(ms[k]+'-01').toLocaleDateString('ca-ES',{month:'short'})}</text>`}).join('');
  // moviments
- const mv=tx.filter(t=>inMonth(t,m)).sort((a,b)=>b.date.localeCompare(a.date));
- $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)}${t.m?' (compta aquest mes)':''} · ${t.cat}</small></div><div class="r ${EXCL.has(t.cat)?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>';
+ const q=$('#q').value.trim().toLowerCase(),qn=q.replace(',','.');
+ const hit=t=>(t.note+' '+t.cat).toLowerCase().includes(q)||(/^-?[\d.]+$/.test(qn)&&String(Math.abs(t.amt)).startsWith(qn.replace('-','')));
+ const mv=tx.filter(t=>q?hit(t):inMonth(t,m)).sort((a,b)=>b.date.localeCompare(a.date));
+ $('#qsum').textContent=q?`${mv.length} moviments · total ${eur(mv.reduce((a,t)=>a+t.amt,0))}`:'';
+ $('#movs').innerHTML=mv.map(t=>`<div class="row" data-id="${esc(t.id)}"><div><div class="t">${esc(t.note||t.cat)}</div><small>${t.date.slice(8)}/${t.date.slice(5,7)}${q?'/'+t.date.slice(2,4):''}${t.m&&!q?' (compta aquest mes)':''} · ${t.cat}</small></div><div class="r ${EXCL.has(t.cat)?'':t.amt<0?'neg':'pos'}">${eur(t.amt)}</div></div>`).join('')||(q?'<div class="empty">Res no coincideix amb la cerca.</div>':'<div class="empty">Cap moviment aquest mes. Toca + per afegir-ne.</div>');
  // inversions
  const hs=holdings();let cost=0,val=0;
  $('#i-upd').textContent=live?.updated?`· preus de les ${new Date(live.updated*1000).toLocaleString('ca-ES',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})}`:'';
